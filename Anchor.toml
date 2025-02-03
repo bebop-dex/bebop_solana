@@ -1,0 +1,19 @@
+[toolchain]
+solana_version = "2.0.19"
+anchor_version = "0.30.1-4cdb0ebe8f613f7dbbd5c4b00571139b2517898f"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+bebop_rfq = "BHDQ7sHBxrvLutJTF2cDmr77Ws5kQznVShAvBxozZJ63"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+
