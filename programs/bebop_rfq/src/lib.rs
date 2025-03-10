@@ -1,11 +1,13 @@
 mod instructions;
-mod error;
+pub mod error;
 
 use anchor_lang::prelude::*;
 use instructions::*;
 
 #[constant]
 pub const TEMPORARY_WSOL_TOKEN_ACCOUNT: &[u8] = instructions::TEMPORARY_WSOL_TOKEN_ACCOUNT;
+#[constant]
+pub const SHARED_ACCOUNT: &[u8] = instructions::SHARED_ACCOUNT;
 
 
 #[cfg(not(feature = "production"))]
@@ -24,4 +26,3 @@ pub mod bebop_rfq {
         handle_swap(ctx, input_amount, output_amount, expire_at)
     }
 }
-
