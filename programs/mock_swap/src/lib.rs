@@ -3,10 +3,9 @@ use anchor_spl::{token::Token, token_2022::Token2022, token_interface::{Mint, To
 mod utils;
 
 
-#[cfg(not(feature = "production"))]
-declare_id!("AutobNFLMzX1rFCDgwWpwr3ztG5c1oDbSrGq7Jj2LgE");
-
 pub const POOL_ACCOUNT: &[u8] = b"pool-account";
+
+declare_id!("mock111111111111111111111111111111111111111");
 
 #[program]
 pub mod mock_swap {

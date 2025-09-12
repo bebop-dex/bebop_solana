@@ -8,14 +8,14 @@ use anchor_lang::{
 };
 use anchor_spl::{associated_token::spl_associated_token_account::instruction, token::{self, spl_token::{instruction::sync_native, native_mint}}};
 use assert_matches::assert_matches;
+use bebop_rfq::bebop_rfq::AmountWithExpiry;
 use itertools::Itertools;
 use solana_program_test::{
     tokio::{self, sync::Mutex},
     BanksClient, BanksClientError, ProgramTest,
 };
 use solana_sdk::{
-    feature_set::bpf_account_data_direct_mapping, native_token::LAMPORTS_PER_SOL,
-    signature::{Keypair, Signature}, signer::Signer, system_instruction, transaction::{Transaction, TransactionError},
+    feature_set::bpf_account_data_direct_mapping, message::Message, native_token::LAMPORTS_PER_SOL, signature::{Keypair, Signature}, signer::Signer, system_instruction, transaction::{Transaction, TransactionError}
 };
 use spl_token_client::{
     client::{
@@ -128,27 +128,31 @@ impl TestEnvironment {
             
             let data = bebop_rfq::instruction::Swap {
                 input_amount: test_mode.input_amounts[i],
-                output_amount: test_mode.output_amounts[i],
-                expire_at: i64::MAX,
+                output_amounts: vec![ AmountWithExpiry {
+                    amount: test_mode.output_amounts[i],
+                    expiry: u64::MAX,
+                }],
+                event_id: 0
             }
             .data();
+
+            let accs = bebop_rfq::accounts::Swap {
+                maker: makers[i],
+                taker: if test_mode.use_shared_taker {*shared_pda} else {*taker},
+                receiver: *cur_receiver_address,
+                taker_input_mint_token_account: if test_mode.use_shared_taker {*shared_token_a_account} else {*taker_token_a_account},
+                maker_input_mint_token_account: if makers_token_a_account.is_empty() { None } else { makers_token_a_account.get(i).cloned() },
+                receiver_output_mint_token_account: *cur_receiver_token_b_account,
+                maker_output_mint_token_account: if makers_token_b_account.is_empty() { None } else { makers_token_b_account.get(i).cloned() },
+                input_mint: *token_a_mint,
+                input_token_program: *token_a_program_id,
+                output_mint: *token_b_mint,
+                output_token_program: *token_b_program_id,
+                system_program: system_program::ID,
+            };
             let mut instruction = Instruction {
                 program_id: bebop_rfq::ID,
-                accounts: bebop_rfq::accounts::Swap {
-                    maker: makers[i],
-                    taker: if test_mode.use_shared_taker {*shared_pda} else {*taker},
-                    receiver: *cur_receiver_address,
-                    taker_input_mint_token_account: if test_mode.use_shared_taker {*shared_token_a_account} else {*taker_token_a_account},
-                    maker_input_mint_token_account: if makers_token_a_account.is_empty() { None } else { makers_token_a_account.get(i).cloned() },
-                    receiver_output_mint_token_account: *cur_receiver_token_b_account,
-                    maker_output_mint_token_account: if makers_token_b_account.is_empty() { None } else { makers_token_b_account.get(i).cloned() },
-                    input_mint: *token_a_mint,
-                    input_token_program: *token_a_program_id,
-                    output_mint: *token_b_mint,
-                    output_token_program: *token_b_program_id,
-                    system_program: system_program::ID,
-                }
-                .to_account_metas(None),
+                accounts: accs.to_account_metas(None),
                 data,
             };
             if !test_mode.use_shared_taker {
@@ -234,8 +238,11 @@ impl TestEnvironment {
 
         let data_1 = bebop_rfq::instruction::Swap {
             input_amount: test_mode.input_amounts[0],
-            output_amount: middle_amount,
-            expire_at: i64::MAX,
+            output_amounts: vec![ AmountWithExpiry {
+                amount: middle_amount,
+                expiry: u64::MAX,
+            }],
+            event_id: 0
         }.data();
         let mut instruction_1 = Instruction {
             program_id: bebop_rfq::ID,
@@ -268,8 +275,11 @@ impl TestEnvironment {
 
         let data_2 = bebop_rfq::instruction::Swap {
             input_amount: middle_amount,
-            output_amount: test_mode.output_amounts[0],
-            expire_at: i64::MAX,
+            output_amounts: vec![AmountWithExpiry {
+                amount: test_mode.output_amounts[0],
+                expiry: u64::MAX,
+            }],
+            event_id: 0
         }.data();
         let mut instruction_2 = Instruction {
             program_id: bebop_rfq::ID,
@@ -794,8 +804,6 @@ pub async fn process_instructions(
         recent_blockhash,
     );
 
-    // println!("TX size: {}", bincode::serialize(&tx).unwrap().len());
-
     banks_client.process_transaction(tx).await
 }
 
@@ -812,46 +820,17 @@ pub async fn sign_and_execute_tx(
     let recent_blockhash = banks_client.get_latest_blockhash().await.unwrap();
 
     // Create the main transaction with taker and payer as signers
-    let mut tx = Transaction::new_with_payer(instructions, Some(&payer.pubkey()));
-    println!("TX size before signing: {}", bincode::serialize(&tx).unwrap().len());
-    tx.partial_sign(&[taker], recent_blockhash);
-    tx.partial_sign(makers, recent_blockhash);
-    tx.partial_sign(&[payer], recent_blockhash);
+    let msg = Message::new_with_blockhash(instructions, Some(&payer.pubkey()), &recent_blockhash);
+    let mut tx = Transaction::new_unsigned(msg);
 
-    println!("tx:{:?}", tx);
-
-    // // Collect additional signatures from makers
-    // for (i, instruction) in instructions.iter().enumerate() {
-    //     // let mut maker_tx = Transaction::new_with_payer(&[instruction.clone()], Some(&payer.pubkey()));
-    //     let mut maker_tx = tx.clone();
-    //     maker_tx.message.instructions = vec![tx.message.instructions[i].clone()];
-    //     println!("mtx:{:?}", maker_tx);
-    //     let signature = makers[i].try_sign_message(&maker_tx.message_data()).unwrap();
-    //     println!("sig:{:?}", signature);
-
-    //     let tx_pos = tx.get_signing_keypair_positions(&[makers[i].pubkey()]).clone().unwrap()[0].unwrap();
-    //     let maker_tx_pos = maker_tx.get_signing_keypair_positions(&[makers[i].pubkey()]).clone().unwrap()[0].unwrap();
-    //     println!("tx_pos:{:?} maker_tx_pos:{:?}", tx_pos, maker_tx_pos);
-    //     tx.signatures[tx_pos] = signature;
-
-    //     // maker_tx.partial_sign(&[&makers[i]], recent_blockhash);
-    //     // println!("mtx2:{:?}", maker_tx);
-    //     // let tx_pos = tx.get_signing_keypair_positions(&[makers[i].pubkey()]).clone().unwrap()[0].unwrap();
-    //     // let maker_tx_pos = maker_tx.get_signing_keypair_positions(&[makers[i].pubkey()]).clone().unwrap()[0].unwrap();
-    //     // println!("tx_pos:{:?} maker_tx_pos:{:?}", tx_pos, maker_tx_pos);
-    //     // tx.signatures[tx_pos] = maker_tx.signatures[maker_tx_pos];
-
-
-    //     // for pos in 0..tx.signatures.len() {
-    //     //     if tx.signatures[pos] == Signature::default() {
-    //     //         maker_tx.get_signing_keypair_positions(pubkeys)
-    //     //         tx.signatures[pos] = maker_tx.signatures[2];
-    //     //         break;
-    //     //     }
-    //     // }
-    // }
-    
-
+    tx.message.recent_blockhash = recent_blockhash;
+    let mut signatures: Vec<(Pubkey, Signature)> = vec![];
+    for signer in makers.iter().chain(std::iter::once(taker)).chain(std::iter::once(payer)) {
+        let signature = signer.try_sign_message(&tx.message_data()).unwrap();
+        signatures.push((signer.pubkey(), signature));
+    }
+    tx.replace_signatures(&signatures)?;
+    // println!("tx:{:?}", tx);
     println!("Final TX size: {}", bincode::serialize(&tx).unwrap().len());
     banks_client.process_transaction(tx).await?;
 

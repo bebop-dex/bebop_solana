@@ -14,15 +14,29 @@ use anchor_spl::{
     },
     token_interface::{self, spl_pod::primitives::PodU16, TokenAccount, TokenInterface},
 };
-use crate::{error::BebopError, instructions::utils::{transfer, unwrap_sol}, SHARED_ACCOUNT};
+use crate::{bebop_rfq::AmountWithExpiry, error::BebopError, instructions::utils::{transfer, unwrap_sol}, SHARED_ACCOUNT};
+
 
 pub fn handle_swap<'c: 'info, 'info>(
     ctx: Context<'_, '_, 'c, 'info, Swap<'info>>,
     input_amount: u64,
-    output_amount: u64,
-    expire_at: i64,
+    output_amounts: Vec<AmountWithExpiry>,
+    event_id: u64,
 ) -> Result<()> {
-    require_gte!(expire_at, Clock::get()?.unix_timestamp, BebopError::OrderExpired);
+    let now = Clock::get()?.unix_timestamp as u64;
+    let mut output_amount: u64 = 0;
+    for (i, amount_with_expiry) in output_amounts.iter().enumerate() {
+        require!(
+            i == 0 || 
+            (amount_with_expiry.amount <= output_amounts[i - 1].amount && amount_with_expiry.expiry > output_amounts[i - 1].expiry),
+            BebopError::InvalidOutputAmount
+        );
+        if amount_with_expiry.expiry >= now {
+            output_amount = amount_with_expiry.amount;
+            break;
+        }
+    }
+    require!(output_amount > 0, BebopError::OrderExpired);
     let mut bump: u8 = 0;
     let filled_taker_amount: u64;
     if !&ctx.accounts.taker.is_signer{
@@ -172,6 +186,8 @@ pub fn handle_swap<'c: 'info, 'info>(
         )?,
     }
     emit!(BebopSwap{
+        event_id: event_id,
+        maker_address: ctx.accounts.maker.key(),
         taker_token: ctx.accounts.input_mint.key(),
         maker_token: ctx.accounts.output_mint.key(),
         filled_taker_amount,
@@ -184,10 +200,12 @@ pub fn handle_swap<'c: 'info, 'info>(
 
 #[derive(Accounts)]
 pub struct Swap<'info> {
+    /// CHECK: taker isn't Signer when it's shared-pda account 
     #[account(mut)]
-    pub taker: UncheckedAccount<'info>,  // Not Signer when it's shared-pda account 
+    pub taker: UncheckedAccount<'info>,
     #[account(mut)]
     pub maker: Signer<'info>,
+    /// CHECK: can be same as taker address or any other address 
     #[account(mut)]
     pub receiver: UncheckedAccount<'info>,
     #[account(
@@ -218,8 +236,10 @@ pub struct Swap<'info> {
         token::token_program = output_token_program
     )]
     pub maker_output_mint_token_account: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
+    /// CHECK: Validated by token account mint check
     pub input_mint: UncheckedAccount<'info>,
     pub input_token_program: Interface<'info, TokenInterface>,
+    /// CHECK: Validated by token account mint check
     pub output_mint: UncheckedAccount<'info>,
     pub output_token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
@@ -227,6 +247,8 @@ pub struct Swap<'info> {
 
 #[event]
 struct BebopSwap {
+    event_id: u64,
+    maker_address: Pubkey,
     taker_token: Pubkey,
     maker_token: Pubkey,
     filled_taker_amount: u64,

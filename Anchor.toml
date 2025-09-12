@@ -6,9 +6,6 @@ anchor_version = "0.30.1-4cdb0ebe8f613f7dbbd5c4b00571139b2517898f"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
-bebop_rfq = "BHDQ7sHBxrvLutJTF2cDmr77Ws5kQznVShAvBxozZJ63"
-
 [registry]
 url = "https://api.apr.dev"
 

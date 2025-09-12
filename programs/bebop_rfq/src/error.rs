@@ -9,4 +9,5 @@ pub enum BebopError {
     Token2022MintExtensionNotSupported,
     OrderExpired,
     InvalidNativeTokenAddress,
+    InvalidOutputAmount
 }
