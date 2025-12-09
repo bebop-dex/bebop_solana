@@ -121,7 +121,12 @@ pub fn handle_swap<'c: 'info, 'info>(
         )?,
     }
 
-    let filled_maker_amount: u64 = if filled_taker_amount < input_amount {output_amount * filled_taker_amount / input_amount} else {output_amount};
+    let filled_maker_amount: u64 = if filled_taker_amount < input_amount {
+        ((output_amount as u128 * filled_taker_amount as u128) / input_amount as u128) as u64
+    } else {
+        // max maker_amount is output_amount, even if filled_taker_amount > input_amount
+        output_amount
+    };
     require!(filled_maker_amount > 0, BebopError::ZeroMakerAmount);
     match (
         &ctx.accounts.maker_output_mint_token_account,
