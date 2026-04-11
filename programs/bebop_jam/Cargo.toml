@@ -1,12 +1,12 @@
 [package]
-name = "bebop_rfq"
+name = "jam_settlement"
 version = "0.1.0"
-description = "Created with Anchor"
+description = "Bebop JAM aggregation API — Solana settlement program"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "bebop_rfq"
+name = "jam_settlement"
 
 [features]
 default = []
@@ -31,7 +31,5 @@ anchor-lang = { workspace = true }
 anchor-spl  = { workspace = true, features = ["token_2022"] }
 
 [dev-dependencies]
-mock_swap           = { path = "../mock_swap", features = ["no-entrypoint"] }
 solana-program-test = { workspace = true }
 solana-sdk          = { workspace = true }
-test-case           = { workspace = true }
