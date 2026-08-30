@@ -9,20 +9,49 @@
 // is reachable through interactions — no dedicated entrypoint needed.
 //
 // ─── Flash loans ─────────────────────────────────────────────────────────────
-// Gated by use_jam_authority: true on flash_borrow / flash_repay interaction
-// entries. run_interactions calls invoke_signed with JAM_AUTHORITY_SEED, so
-// FlashLoanProvider's FlashBorrow constraint (signer + address == config.bebop_authority)
-// is satisfied only via JAM. Zero compile-time binding — FlashLoanProvider stores the
-// expected pubkey once via update_config(set_bebop_authority).
+// The BORROW is gated by use_jam_authority: true. run_interactions calls
+// invoke_signed with JAM_AUTHORITY_SEED, so the provider's FlashBorrow
+// constraint (signer + address == config.flash_authority) is satisfied only
+// via JAM. Zero compile-time binding — the provider stores the expected pubkey
+// once via update_config(set_flash_authority).
 //
-// Execution sequence (all within one settle() call):
+// ⛔ THE REPAY MUST NOT BE AN INTERACTION, AND THIS BLOCK USED TO SAY IT WAS.
+//
+// The previous sequence read:
 //   interaction[i]     : quid::flash_borrow { use_jam_authority: true }
-//   interaction[i+1..j]: solver-defined — JAM has no knowledge of these
-//   interaction[j+1]   : quid::flash_repay { use_jam_authority: true }
+//   interaction[j+1]   : quid::flash_repay  { use_jam_authority: true }
+// ...with the claim "Sysvar lookahead in flash_borrow confirms flash_repay
+// exists later in the same transaction." That claim is FALSE, and the sequence
+// it describes can never open a flash loan.
 //
-// Solana reverts all state on any failure. Sysvar lookahead in flash_borrow
-// confirms flash_repay exists later in the same transaction.
-// Flash loans are free — no fee charged by FlashLoanProvider.
+// flash_borrow scans the instructions sysvar via load_current_index_checked /
+// load_instruction_at_checked. THE SYSVAR CONTAINS ONLY TOP-LEVEL
+// INSTRUCTIONS — inner instructions dispatched through CPI never appear in it.
+// When both legs are interactions they are both CPIs inside ONE top-level
+// settle(), so the scan starts at settle's own index + 1, finds no top-level
+// repay, and the borrow reverts with FlashRepayMissing. It fails closed, which
+// is the safe direction, but it never works.
+//
+// The shape that DOES work puts the repay at the top level:
+//   ix 0 (top-level) : jam::settle
+//                        interaction[i]      : quid::flash_borrow { use_jam_authority: true }
+//                        interaction[i+1..j] : solver-defined — JAM has no knowledge of these
+//   ix 1 (top-level) : quid::flash_repay     signed by the solver's own keypair
+//
+// This is possible because the provider gates the two legs differently and on
+// purpose: FlashBorrow requires the configured authority, FlashRepay requires
+// only `repayer: Signer`. Repaying can only make the pool whole, so it needs
+// no privilege — and a top-level instruction cannot carry a PDA signature
+// anyway, since PDAs sign only through CPI.
+//
+// Atomicity is unaffected: both instructions are in one transaction, and
+// Solana reverts all state on any failure.
+//
+// ⚠️ AND THE REPAY IS NO LONGER FREE. This block used to say "Flash loans are
+// free — no fee charged by FlashLoanProvider." The provider now REQUIRES
+// tip_lamports >= principal * FLASH_TIP_BPS / 10_000; a solver that tips zero
+// reverts. The tip is rent on the SOL depositors' lamports, which are held
+// liquid at their expense precisely so this loan can exist.
 //
 // SPL path: token_amount > 0 triggers remaining_accounts vault transfer.
 // Blocked interaction targets: system_program, spl_token, spl_token_2022,
@@ -1225,6 +1254,15 @@ fn balance_of<'info>(
 //        authority delegation to interactions that explicitly request it,
 //        eliminating that surface while preserving the flash loan path.
 
+/// `sha256("global:flash_repay")[..8]` — the provider's own Anchor
+/// discriminator, pinned here so a repay smuggled into the interaction list is
+/// recognised without JAM having to depend on the provider's crate.
+///
+/// Verified against the provider's `FLASH_REPAY_DISC`; if Anchor's derivation
+/// or the instruction's name ever changes, the guard silently stops matching,
+/// which is why the constant is stated rather than computed.
+const FLASH_REPAY_DISC: [u8; 8] = [0xb6, 0x8f, 0x13, 0x17, 0x27, 0xdd, 0xb8, 0x4e];
+
 fn run_interactions<'info>(
     remaining: &'info [AccountInfo<'info>],
     interactions: &[SolanaInteraction],
@@ -1260,6 +1298,22 @@ fn run_interactions<'info>(
                 && prog_key != anchor_spl::token::ID
                 && prog_key != anchor_spl::token_2022::ID,
             JamError::InteractionTargetProtected
+        );
+
+        // ⛔ A FLASH REPAY DISPATCHED AS AN INTERACTION CAN NEVER BE SEEN BY
+        //    THE BORROW THAT NEEDS IT. The provider looks for the repay in the
+        //    instructions sysvar, which lists only top-level instructions; an
+        //    interaction is a CPI and is invisible there. Left to run, the
+        //    borrow reverts with the provider's own FlashRepayMissing — a
+        //    correct outcome reached confusingly, from a different program,
+        //    after the solver has already paid for the transaction.
+        //
+        //    Refusing it here names the actual mistake. The repay belongs at
+        //    the top level, signed by the solver: the provider gates the two
+        //    legs differently on purpose, and repayment needs no privilege.
+        require!(
+            ix.data.len() < 8 || ix.data[..8] != FLASH_REPAY_DISC,
+            JamError::FlashRepayMustBeTopLevel
         );
 
         let mut metas = Vec::with_capacity(ix.accounts.len());

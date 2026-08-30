@@ -39,4 +39,16 @@ pub enum JamError {
     RecordNotExpired,            // close_nonce_record called before order.expiry has passed;
                                  // the record is still within its replay-protection window.
 
+
+    /// ⚠️ APPENDED AT THE END ON PURPOSE. Anchor numbers `#[error_code]`
+    /// variants by declaration order, so inserting one anywhere above shifts
+    /// every code after it and silently re-points every client that decodes by
+    /// number. New variants go here.
+    ///
+    /// A `flash_repay` was dispatched as an interaction. It cannot work: the
+    /// provider finds the repay by scanning the instructions sysvar, which
+    /// lists only TOP-LEVEL instructions, and an interaction is a CPI. Put the
+    /// repay at the top level, signed by the solver — the provider gates the
+    /// two legs differently on purpose and requires no privilege to repay.
+    FlashRepayMustBeTopLevel,
 }
